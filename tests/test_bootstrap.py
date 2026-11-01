@@ -20,7 +20,7 @@ class BootstrapTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.payload = {n:b'fixture content\n' for n in
-                        ('install.sh','vps_guard.py','vps_wizard.py','bin/vps-guard','tools/build_release.py')}
+                        ('install.sh','vps_guard.py','vps_wizard.py','vps_auto.py','bin/vps-guard','tools/build_release.py')}
         self.manifest = ''.join(hashlib.sha256(data).hexdigest() + '  ' + name + '\n'
                                 for name, data in self.payload.items()).encode('ascii')
         self.expected = hashlib.sha256(self.manifest).hexdigest()

@@ -14,7 +14,7 @@ fi
 }
 task_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 /usr/bin/python3 "$task_dir/tools/build_release.py" --check-manifest "$task_dir"
-for task_target in /etc/vps-guard /var/lib/vps-guard /var/lib/vps-guard/lock /var/lib/vps-guard/wizard.lock /usr/local/lib/vps-guard /usr/local/bin/vps-guard /usr/local/lib/vps-guard/vps_guard.py /usr/local/lib/vps-guard/vps_wizard.py /usr/local/lib/vps-guard/vps_auto.py; do
+for task_target in /etc/vps-guard /var/lib/vps-guard /var/lib/vps-guard/lock /var/lib/vps-guard/wizard.lock /usr/local/lib/vps-guard /usr/local/bin/vps-guard /usr/local/lib/vps-guard/vps_guard.py /usr/local/lib/vps-guard/vps_wizard.py /usr/local/lib/vps-guard/vps_auto.py /usr/local/lib/vps-guard/installed-version; do
   if [ -L "$task_target" ]; then
     echo "安装目标为符号链接，停止：$task_target" >&2
     exit 1
@@ -56,5 +56,6 @@ install -m 0644 "$task_dir/vps_wizard.py" /usr/local/lib/vps-guard/vps_wizard.py
 install -m 0644 "$task_dir/vps_auto.py" /usr/local/lib/vps-guard/vps_auto.py
 install -m 0755 "$task_dir/bin/vps-guard" /usr/local/bin/vps-guard
 install -m 0600 "$task_dir/config.example.json" /etc/vps-guard/config.example.json
+/usr/bin/python3 "$task_dir/vps_guard.py" --version > /usr/local/lib/vps-guard/installed-version
 echo 'VPS Guard 已安装；未修改 SSH、防火墙或 TCP 参数。'
 echo '开始：sudo vps-guard auto；以后 sudo vps-guard 打开菜单，回车执行个人默认方案。'
