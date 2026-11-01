@@ -4,6 +4,27 @@ set -euo pipefail
 umask 077
 readonly VPS_GUARD_COMMIT="b6e3f8b5f2bd39707e0067c7fc8a853d7f21a6c7"
 readonly VPS_GUARD_MANIFEST_SHA256="17d10da06165e04776aee3b515b95f8aa5311f006337d016d3064e50a20c5fc6"
+
+# BEGIN START CONFIRMATION
+confirm_hardening() {
+  echo '即将执行个人默认加固：ops＋指定公钥、SSH／防火墙、443/TCP＋UDP、BBR＋fq、更新和日志维护。'
+  echo '不新建 Swap，不安装 Tailscale；SSH 切换时仍需新连接验证。'
+  while true; do
+    printf '是否确认开始安装／加固？[y/N]：'
+    if ! read -r task_confirmation; then
+      echo
+      echo '已取消，未安装或应用加固。'
+      return 1
+    fi
+    case "$task_confirmation" in
+      y|Y|[yY][eE][sS]) return 0 ;;
+      ''|n|N|[nN][oO]) echo '已取消，未安装或应用加固。'; return 1 ;;
+      *) echo '请输入 y 或 n；直接回车取消。' ;;
+    esac
+  done
+}
+# END START CONFIRMATION
+
 task_mode=install
 task_destination=
 case "$#" in
@@ -11,7 +32,7 @@ case "$#" in
   1)
     if [ "$1" = --help ]; then
       echo '用法：bash bootstrap.sh [--download-only 新目录]'
-      echo '默认安装后直接执行个人默认方案；download-only 仅下载并验证，不安装、不提权、不运行工具。'
+      echo '默认先询问是否开始，确认后安装并执行个人默认方案；download-only 仅下载并验证，不安装、不提权、不运行工具。'
       exit 0
     fi
     echo '参数错误；使用 --help。' >&2; exit 2 ;;
@@ -30,6 +51,9 @@ if [ "$task_mode" = install ]; then
   fi
   [ -r /dev/tty ] || { echo '请在可交互的 SSH 终端运行。' >&2; exit 1; }
   exec </dev/tty
+  if ! confirm_hardening; then
+    exit 0
+  fi
   [ -d /run/systemd/system ] || { echo '需要 systemd。' >&2; exit 1; }
   [ -r /etc/os-release ] || { echo '无法识别发行版。' >&2; exit 1; }
   . /etc/os-release

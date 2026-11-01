@@ -1,6 +1,8 @@
 import hashlib
+import os
 from pathlib import Path
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -13,6 +15,99 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = (ROOT / 'bootstrap.sh').read_text(encoding='utf-8')
 VERIFIER = SCRIPT.split("<<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
+CONFIRMATION = SCRIPT.split('# BEGIN START CONFIRMATION\n',1)[1].split('# END START CONFIRMATION',1)[0]
+BASH = (str(Path(r'C:\Program Files\Git\bin\bash.exe'))
+        if os.name=='nt' and Path(r'C:\Program Files\Git\bin\bash.exe').exists()
+        else (shutil.which('bash') if os.name!='nt' else None))
+
+
+@unittest.skipUnless(BASH, 'requires Bash')
+class ConfirmationTests(unittest.TestCase):
+    def check_answer(self, value):
+        code=CONFIRMATION+'\nif confirm_hardening; then echo BEGIN_AUTHORIZED_WORK; fi\n'
+        result=subprocess.run([BASH,'-c',code],input=value.encode('utf-8'),capture_output=True,timeout=10)
+        result.stdout=result.stdout.decode('utf-8',errors='replace')
+        result.stderr=result.stderr.decode('utf-8',errors='replace')
+        return result
+
+    def test_blank_no_and_eof_cancel(self):
+        for value in ('\n','n\n','N\n','no\n',''):
+            with self.subTest(value=value):
+                result=self.check_answer(value)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertNotIn('BEGIN_AUTHORIZED_WORK',result.stdout)
+                self.assertIn('已取消',result.stdout)
+
+    def test_only_explicit_yes_starts(self):
+        for value in ('y\n','Y\n','yes\n','Yes\n'):
+            with self.subTest(value=value):
+                result=self.check_answer(value)
+                self.assertIn('BEGIN_AUTHORIZED_WORK',result.stdout)
+
+    def test_invalid_answer_is_not_confirmation(self):
+        result=self.check_answer('maybe\n\n')
+        self.assertNotIn('BEGIN_AUTHORIZED_WORK',result.stdout)
+        self.assertIn('请输入 y 或 n',result.stdout)
+
+    @unittest.skipUnless(os.name=='posix','requires a controlling terminal')
+    def test_full_entry_cancels_before_installed_fast_path_or_package_commands(self):
+        import pty
+        import select
+        import signal
+        import time
+        for answer in (b'n\n',b'\n',b'\x04'):
+            with self.subTest(answer=answer), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory); mockbin=root/'bin'; mockbin.mkdir()
+                log=root/'mutations.log'
+                for name,body in {
+                    'uname':"printf 'Linux\\n'",
+                    'id':"printf '0\\n'",
+                    'sudo':'echo sudo >> "$VPS_GUARD_TEST_LOG"; exit 91',
+                    'apt-get':'echo apt-get >> "$VPS_GUARD_TEST_LOG"; exit 91',
+                    'curl':'echo curl >> "$VPS_GUARD_TEST_LOG"; exit 91',
+                }.items():
+                    path=mockbin/name; path.write_text('#!/bin/sh\n'+body+'\n'); path.chmod(0o755)
+                installed=root/'installed'; installed.mkdir()
+                (installed/'vps_auto.py').write_text('fixture')
+                (installed/'installed-version').write_text('0.3.1\n')
+                launcher=mockbin/'installed-vps-guard'
+                launcher.write_text('#!/bin/sh\necho installed-tool >> "$VPS_GUARD_TEST_LOG"\nprintf "0.3.1\\n"\n')
+                launcher.chmod(0o755)
+                # Redirect only installed-file paths to a fixture; execute the full entry.
+                entry=SCRIPT.replace('/usr/local/bin/vps-guard',str(launcher)).replace('/usr/local/lib/vps-guard',str(installed))
+                script=root/'bootstrap.sh'; script.write_text(entry,encoding='utf-8')
+                env=dict(os.environ,PATH=str(mockbin)+os.pathsep+os.environ['PATH'],VPS_GUARD_TEST_LOG=str(log))
+                pid,fd=pty.fork()
+                if pid==0:
+                    os.execve(BASH,[BASH,str(script)],env)
+                output=b''; sent=False; status=None; deadline=time.monotonic()+10
+                try:
+                    while time.monotonic()<deadline:
+                        if select.select([fd],[],[],0.1)[0]:
+                            try:
+                                chunk=os.read(fd,4096)
+                            except OSError:
+                                break
+                            if not chunk: break
+                            output+=chunk
+                            if not sent and '[y/N]'.encode() in output:
+                                os.write(fd,answer); sent=True
+                        ended,code=os.waitpid(pid,os.WNOHANG)
+                        if ended:
+                            status=code; break
+                    if status is None:
+                        while time.monotonic()<deadline:
+                            ended,code=os.waitpid(pid,os.WNOHANG)
+                            if ended:
+                                status=code; break
+                            time.sleep(0.01)
+                        if status is None:
+                            os.kill(pid,signal.SIGKILL); os.waitpid(pid,0)
+                    self.assertTrue(sent,output.decode('utf-8',errors='replace'))
+                    self.assertEqual(status,0,output.decode('utf-8',errors='replace'))
+                    self.assertFalse(log.exists(),'cancel ran installed software or mutation commands')
+                finally:
+                    os.close(fd)
 
 
 class BootstrapTests(unittest.TestCase):

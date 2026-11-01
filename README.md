@@ -1,6 +1,6 @@
 # VPS Guard — 个人默认方案
 
-当前版本：0.3.1。面向单台 Debian／Ubuntu＋systemd VPS，Python 3.10+。默认入口不再询问公钥、账号、业务端口、带宽、RTT、Swap 或备份选择：自动执行固定方案，结束后输出实际操作报告。
+当前版本：0.3.1。面向单台 Debian／Ubuntu＋systemd VPS，Python 3.10+。在线入口先询问一次是否确认开始；确认后不再询问公钥、账号、业务端口、带宽、RTT、Swap 或备份选择，自动执行固定方案，结束后输出实际操作报告。
 
 **这是 killerae 的个人专用预设。** 默认账号 ops，内置 lu-admin 公钥，并启用免密 sudo。只有持有对应私钥的人应在自己的 VPS 使用此预设；其他人复用前必须更换 `vps_auto.py` 中的 PUBLIC_KEY。密钥登录后拥有完整管理员权限，私钥必须由你妥善保管，不能上传服务器或 GitHub。
 
@@ -16,7 +16,7 @@ ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID5kxFrMhEWqeZxm5P4cr09PKUMUZRVDSRvzZ4cwEVAE
 bash -c 'u=https://raw.githubusercontent.com/killerae/vps-guard/main/bootstrap.sh; f=$(mktemp) && (curl -fsSL "$u" -o "$f" || wget -qO "$f" "$u") && bash "$f"; r=$?; rm -f -- "$f"; exit "$r"'
 ```
 
-入口完整下载后才执行；下载固定提交的工具包，校验固定清单及逐文件哈希，再安装并立即运行默认方案。需要 curl 或 wget 至少一个可用；不会要求 GitHub Token 或私钥。入口来自 main，使用者须信任仓库维护者和 HTTPS；固定入口时可把 main 换成自己审阅过的 bootstrap 提交 SHA。
+入口完整下载后先显示默认方案和「是否确认开始安装／加固？[y/N]」。只有明确输入 y／yes 才继续下载、校验和安装固定版本，并执行默认方案；回车、n／no 或输入结束都会取消，本次不安装或应用加固。即使已安装同版本，进入快速续跑前也会先确认。仅下载校验的 --download-only 模式不会运行加固，也不会询问此确认。需要 curl 或 wget 至少一个可用；不会要求 GitHub Token 或私钥。入口来自 main，使用者须信任仓库维护者和 HTTPS；固定入口时可把 main 换成自己审阅过的 bootstrap 提交 SHA。
 
 **从旧版升级：先 Ctrl+C 退出当前旧向导，再执行上述命令。** 安装器会拒绝覆盖运行中的向导，以及待确认、未完成或恢复失败的事务。先用旧工具确认／恢复这些变更，随后再升级。旧配置和旧代码在 VPS 本地保留备份，不上传 GitHub。
 
