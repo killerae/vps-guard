@@ -41,6 +41,8 @@ class FakeRunner:
             k, v = args[2].split('=', 1)
             self.defaults[k] = v
             rc, out, err = 0, '', ''
+        elif args == ('systemctl', 'is-active', 'ssh.socket'):
+            rc, out, err = 3, 'inactive', ''
         elif args[:2] == ('systemctl', 'is-active'):
             rc, out, err = 0, 'active', ''
         elif args[:2] == ('systemctl', 'is-enabled'):
@@ -154,6 +156,22 @@ class GuardTests(unittest.TestCase):
     def test_mismatched_ssh_port_rejected(self):
         self.c['ssh_port'] = 22
         self.write(vg.CONFIG, json.dumps(self.c))
+        with self.assertRaises(vg.GuardError):
+            self.g.ssh_ports()
+
+    def test_socket_activation_uses_actual_listen_port(self):
+        self.runner.answers[('systemctl','is-active','ssh.socket')] = (0,'active','')
+        self.runner.answers[('systemctl','show','ssh.socket','--property=Listen','--value')] = (0,'[::]:2222 (Stream) 0.0.0.0:2222 (Stream)','')
+        self.runner.answers[('/usr/sbin/sshd','-T')] = (0,'port 22','')
+        self.assertEqual(self.g.ssh_ports(), [2222])
+
+    def test_unknown_socket_ports_stop_firewall_planning(self):
+        self.runner.answers[('systemctl','is-active','ssh.socket')] = (0,'active','')
+        with self.assertRaises(vg.GuardError):
+            self.g.ssh_ports()
+
+    def test_active_connection_port_mismatch_is_not_guessed(self):
+        self.g.session = lambda: '192.0.2.1 10002 198.51.100.2 2200'
         with self.assertRaises(vg.GuardError):
             self.g.ssh_ports()
 

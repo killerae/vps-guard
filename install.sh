@@ -14,6 +14,12 @@ fi
 }
 task_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 /usr/bin/python3 "$task_dir/tools/build_release.py" --check-manifest "$task_dir"
+for task_target in /etc/vps-guard /var/lib/vps-guard /usr/local/lib/vps-guard /usr/local/bin/vps-guard /usr/local/lib/vps-guard/vps_guard.py; do
+  if [ -L "$task_target" ]; then
+    echo "安装目标为符号链接，停止：$task_target" >&2
+    exit 1
+  fi
+done
 install -d -m 0755 /usr/local/lib/vps-guard /usr/local/bin
 install -d -m 0700 /etc/vps-guard /var/lib/vps-guard
 if [ -f /usr/local/lib/vps-guard/vps_guard.py ]; then

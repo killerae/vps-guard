@@ -347,8 +347,16 @@ class Guard:
     def ssh_ports(self):
         c = self.config()
         actual = [int(x) for x in self.effective_ssh().get("port", []) if x.isdigit()]
+        if self.out("systemctl", "is-active", "ssh.socket") == "active":
+            listen = self.out("systemctl", "show", "ssh.socket", "--property=Listen", "--value")
+            actual = sorted({int(x) for x in re.findall(r":(\d+)\s+\(Stream\)", listen)})
+            if not actual:
+                raise GuardError("SSH socket 激活已启用，但无法确认实际监听端口；停止防火墙变更")
+        session = self.session()
+        if session and int(session.split()[3]) not in actual:
+            raise GuardError("当前 SSH 连接端口与监听配置不一致，先排查 socket／启动参数")
         if c["ssh_port"] is not None and c["ssh_port"] not in actual:
-            raise GuardError("配置端口与 sshd 不一致；首版保留原端口，改端口需另行迁移")
+            raise GuardError("配置端口与 SSH 实际监听不一致；首版保留原端口，改端口需另行迁移")
         if not actual:
             raise GuardError("无法确认 SSH 端口")
         return actual
