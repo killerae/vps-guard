@@ -6,7 +6,19 @@
 
 ## 第一次使用
 
-保留原 SSH 会话，并实际测试服务商网页控制台／Rescue。公开仓库的一键入口将在本版本的 bootstrap.sh 中提供：完整下载入口后执行，入口下载固定提交的工具包，核对固定清单哈希与逐文件哈希，安装后立即进入向导。
+保留原 SSH 会话，并实际测试服务商网页控制台／Rescue。在 VPS 的 SSH 终端粘贴：
+
+```bash
+bash -c 'u=https://raw.githubusercontent.com/killerae/vps-guard/main/bootstrap.sh; f=$(mktemp) && (curl -fsSL "$u" -o "$f" || wget -qO "$f" "$u") && bash "$f"; r=$?; rm -f -- "$f"; exit "$r"'
+```
+
+需要 curl 或 wget 至少一个可用。入口先完整下载，下载成功后才执行；它再下载固定提交的工具包，核对固定清单哈希与逐文件哈希，然后安装并立即进入向导。下载不需要 GitHub Token，也不会要求你提供私钥。
+
+首次入口来自本仓库 main，和任何在线安装器一样，需要信任仓库维护者与 HTTPS。后续工具包固定在已检查的提交，更新 main 不会悄悄替换本入口绑定的工具包。要完全固定入口，可将命令中的 main 改为你已审阅的 bootstrap 提交 SHA。
+
+重复运行同版本入口会继续已安装向导。已有旧版运行记录时停止自动覆盖，避免破坏待恢复事务；升级前先完成／恢复旧变更。
+
+只下载校验、暂不安装时，先下载 bootstrap.sh，再执行 `bash bootstrap.sh --download-only 一个尚不存在的目录`。该模式不提权、不装软件、不运行下载的程序。
 
 向导会集中询问：
 

@@ -222,6 +222,46 @@ class WizardTests(unittest.TestCase):
         with self.assertRaises(vg.GuardError):
             self.w.check_state(state)
 
+    def test_complete_wizard_coordinates_two_new_connections(self):
+        state = self.state('prepare')
+        state['selected'] = ['baseline','ssh','firewall','network','maintenance']
+        self.w.save(state)
+        order = []
+        def prepared_access():
+            self.g.atomic(vg.STATE + '/access-pending.json', json.dumps({
+                'origin': self.g.session(), 'digest': self.g.key_digest(),
+                'boot_id': 'boot-one', 'time': vg.utc()}))
+            order.append('access')
+        def guarded(stage):
+            def run():
+                self.g.arm(); order.append(stage)
+            return run
+        def lock(name='lock'):
+            if name == 'wizard.lock':
+                raise vg.GuardError('original wizard is alive')
+            return contextlib.nullcontext()
+        def reconnect(phase):
+            self.new_session(10002 if phase == 'await_login' else 10003)
+            self.auth()
+            self.assertEqual(self.w.continue_from_login(), 0)
+            return self.w.state()
+        self.g.runner.answers[('ufw','status')] = (0,'Status: active','')
+        with patch.object(self.g, 'stage_baseline', lambda: order.append('baseline')), \
+                patch.object(self.g, 'stage_access', prepared_access), \
+                patch.object(self.g, 'stage_network', guarded('network')), \
+                patch.object(self.g, 'stage_firewall', guarded('firewall')), \
+                patch.object(self.g, 'stage_ssh', guarded('ssh')), \
+                patch.object(self.g, 'stage_maintenance', lambda: order.append('maintenance')), \
+                patch.object(self.g, 'network_ensure'), \
+                patch.object(self.g, 'lock', lock), \
+                patch.object(self.w, 'wait_for', reconnect), \
+                patch.object(self.g, 'verify', lambda scope: print('{"checks":[]}')), \
+                patch.dict(os.environ, {'SUDO_USER':'ops'}):
+            self.assertEqual(self.w.drive(state), 0)
+        self.assertEqual(order, ['baseline','access','network','firewall','ssh','maintenance'])
+        self.assertEqual(self.w.state()['phase'], 'done')
+        self.assertEqual(self.g.tx['status'], 'committed')
+
 
 if __name__ == '__main__':
     unittest.main()

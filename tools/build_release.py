@@ -14,7 +14,8 @@ FILES = (
     'vps_guard.py', 'vps_wizard.py', 'install.sh', 'bin/vps-guard', 'config.example.json',
     'backup.env.example', 'notify.env.example', 'netcatty/snippets.json',
     'netcatty/README.md', 'docs/OPERATIONS.md', 'docs/TESTING.md',
-    'tests/test_vps_guard.py', 'tests/test_wizard.py', 'tools/build_release.py',
+    'tests/test_vps_guard.py', 'tests/test_wizard.py', 'tests/test_bootstrap.py',
+    'bootstrap.sh', 'tools/build_release.py',
 )
 
 
@@ -53,7 +54,7 @@ def main():
     with zipfile.ZipFile(archive, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for name in (*FILES, 'SHA256SUMS.txt'):
             info = zipfile.ZipInfo(prefix + name, (2026, 11, 1, 0, 0, 0))
-            mode = 0o755 if name in ('install.sh', 'bin/vps-guard', 'vps_guard.py', 'tools/build_release.py') else 0o644
+            mode = 0o755 if name in ('install.sh', 'bootstrap.sh', 'bin/vps-guard', 'vps_guard.py', 'tools/build_release.py') else 0o644
             info.create_system = 3
             info.external_attr = (0o100000 | mode) << 16
             info.compress_type = zipfile.ZIP_DEFLATED
