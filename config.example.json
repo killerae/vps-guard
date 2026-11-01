@@ -1,0 +1,27 @@
+{
+  "admin_user": "ops",
+  "admin_public_keys": [],
+  "provider_console_verified": false,
+  "business_ports_confirmed": false,
+  "ssh_port": null,
+  "ssh_sources": [],
+  "business_ports": [],
+  "timezone": "UTC",
+  "upgrade_packages": true,
+  "swap_mib": null,
+  "rollback_minutes": 5,
+  "network": {
+    "devices": [],
+    "target_bandwidth_mbps": null,
+    "representative_rtt_ms": null,
+    "tcp_buffer_max_bytes": null,
+    "socket_buffer_max_bytes": null
+  },
+  "backup": {
+    "enabled": false,
+    "env_file": "/etc/vps-guard/backup.env",
+    "paths": ["/etc"],
+    "calendar": "daily"
+  },
+  "notify_env_file": "/etc/vps-guard/notify.env"
+}

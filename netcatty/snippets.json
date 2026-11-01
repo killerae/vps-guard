@@ -1,0 +1,210 @@
+{
+  "kind": "netcatty.snippets",
+  "version": 2,
+  "exportedAt": "2026-11-01T00:00:00+08:00",
+  "snippetPackages": [
+    "VPS-Guard"
+  ],
+  "snippets": [
+    {
+      "label": "00 工具菜单",
+      "command": "sudo vps-guard",
+      "description": "打开单台主机工具菜单。",
+      "package": "VPS-Guard",
+      "tags": [
+        "vps-guard"
+      ],
+      "noAutoRun": true
+    },
+    {
+      "label": "01 安全检查",
+      "command": "sudo vps-guard audit",
+      "description": "只读检查系统配置，输出脱敏事实清单。",
+      "package": "VPS-Guard",
+      "tags": [
+        "vps-guard"
+      ],
+      "noAutoRun": true
+    },
+    {
+      "label": "02 初次配置",
+      "command": "sudo vps-guard setup",
+      "description": "填写公钥、控制台验证与业务端口。",
+      "package": "VPS-Guard",
+      "tags": [
+        "vps-guard"
+      ],
+      "noAutoRun": true
+    },
+    {
+      "label": "03 查看执行计划",
+      "command": "sudo vps-guard plan",
+      "description": "应用前检查本机计划。",
+      "package": "VPS-Guard",
+      "tags": [
+        "vps-guard"
+      ],
+      "noAutoRun": true
+    },
+    {
+      "label": "04 系统初始化",
+      "command": "sudo vps-guard apply baseline",
+      "description": "系统更新、依赖与时间同步；可能重启相关服务。",
+      "package": "VPS-Guard",
+      "tags": [
+        "vps-guard"
+      ],
+      "noAutoRun": true
+    },
+    {
+      "label": "05 运维账号与公钥",
+      "command": "sudo vps-guard apply access",
+      "description": "保留原连接，准备普通运维账号。",
+      "package": "VPS-Guard",
+      "tags": [
+        "vps-guard"
+      ],
+      "noAutoRun": true
+    },
+    {
+      "label": "06 确认新账号密钥登录",
+      "command": "sudo vps-guard confirm-login",
+      "description": "在新运维账号密钥连接中通过 sudo 执行。",
+      "package": "VPS-Guard",
+      "tags": [
+        "vps-guard"
+      ],
+      "noAutoRun": true
+    },
+    {
+      "label": "07 SSH 加固",
+      "command": "sudo vps-guard apply ssh",
+      "description": "需新账号已验证；限时等待新连接确认。",
+      "package": "VPS-Guard",
+      "tags": [
+        "vps-guard"
+      ],
+      "noAutoRun": true
+    },
+    {
+      "label": "08 防火墙与防爆破",
+      "command": "sudo vps-guard apply firewall",
+      "description": "先确认业务端口；限时等待新连接确认。",
+      "package": "VPS-Guard",
+      "tags": [
+        "vps-guard"
+      ],
+      "noAutoRun": true
+    },
+    {
+      "label": "09 BBR＋fq 与 TCP",
+      "command": "sudo vps-guard apply network",
+      "description": "检查内核和实际出口队列，限时等待新连接确认。",
+      "package": "VPS-Guard",
+      "tags": [
+        "vps-guard"
+      ],
+      "noAutoRun": true
+    },
+    {
+      "label": "10 按需 Swap",
+      "command": "sudo vps-guard apply swap",
+      "description": "未指定大小时保留现状。",
+      "package": "VPS-Guard",
+      "tags": [
+        "vps-guard"
+      ],
+      "noAutoRun": true
+    },
+    {
+      "label": "11 日志与安全更新",
+      "command": "sudo vps-guard apply maintenance",
+      "description": "配置日志、更新任务与本机健康检查。",
+      "package": "VPS-Guard",
+      "tags": [
+        "vps-guard"
+      ],
+      "noAutoRun": true
+    },
+    {
+      "label": "12 配置异地备份调度",
+      "command": "sudo vps-guard apply backup",
+      "description": "需要先配置并验证异地仓库。",
+      "package": "VPS-Guard",
+      "tags": [
+        "vps-guard"
+      ],
+      "noAutoRun": true
+    },
+    {
+      "label": "13 执行备份",
+      "command": "sudo vps-guard backup-run",
+      "description": "执行一次已配置的 restic 备份。",
+      "package": "VPS-Guard",
+      "tags": [
+        "vps-guard"
+      ],
+      "noAutoRun": true
+    },
+    {
+      "label": "14 恢复测试",
+      "command": "sudo vps-guard backup-restore-test",
+      "description": "恢复到独立目录；业务一致性还需测试。",
+      "package": "VPS-Guard",
+      "tags": [
+        "vps-guard"
+      ],
+      "noAutoRun": true
+    },
+    {
+      "label": "15 加固验收",
+      "command": "sudo vps-guard verify",
+      "description": "输出通过、失败及待人工项。",
+      "package": "VPS-Guard",
+      "tags": [
+        "vps-guard"
+      ],
+      "noAutoRun": true
+    },
+    {
+      "label": "16 待确认变更",
+      "command": "sudo vps-guard pending",
+      "description": "查看等待新连接确认的变更编号。",
+      "package": "VPS-Guard",
+      "tags": [
+        "vps-guard"
+      ],
+      "noAutoRun": true
+    },
+    {
+      "label": "17 确认当前变更",
+      "command": "read -r -p '粘贴变更编号: ' VPS_GUARD_RUN_ID && sudo vps-guard confirm \"$VPS_GUARD_RUN_ID\"",
+      "description": "仅在独立新 SSH 连接中执行。",
+      "package": "VPS-Guard",
+      "tags": [
+        "vps-guard"
+      ],
+      "noAutoRun": true
+    },
+    {
+      "label": "18 恢复指定变更",
+      "command": "read -r -p '粘贴要恢复的变更编号: ' VPS_GUARD_RUN_ID && sudo vps-guard rollback \"$VPS_GUARD_RUN_ID\"",
+      "description": "恢复本工具修改；后续编辑冲突时停止。",
+      "package": "VPS-Guard",
+      "tags": [
+        "vps-guard"
+      ],
+      "noAutoRun": true
+    },
+    {
+      "label": "19 安装当前目录工具包",
+      "command": "sudo bash ./install.sh",
+      "description": "先进入已下载、核验并解压的工具包目录。",
+      "package": "VPS-Guard",
+      "tags": [
+        "vps-guard"
+      ],
+      "noAutoRun": true
+    }
+  ]
+}
