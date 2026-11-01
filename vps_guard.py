@@ -24,7 +24,7 @@ import time
 import urllib.request
 import uuid
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 CONFIG = "/etc/vps-guard/config.json"
 STATE = "/var/lib/vps-guard"
 NETWORK_FILE = "/etc/sysctl.d/99-vps-guard-network.conf"

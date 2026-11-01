@@ -37,8 +37,8 @@ if [ "$task_mode" = install ]; then
   # Resume this version without replacing a runtime needed by a pending rollback.
   if [ -x /usr/local/bin/vps-guard ] && [ -f /usr/local/lib/vps-guard/vps_auto.py ] &&
      [ -f /usr/local/lib/vps-guard/installed-version ] &&
-     [ "$(cat /usr/local/lib/vps-guard/installed-version)" = 0.3.0 ] &&
-     [ "$(/usr/local/bin/vps-guard --version)" = 0.3.0 ]; then
+     [ "$(cat /usr/local/lib/vps-guard/installed-version)" = 0.3.1 ] &&
+     [ "$(/usr/local/bin/vps-guard --version)" = 0.3.1 ]; then
     exec /usr/local/bin/vps-guard auto
   fi
   task_packages=

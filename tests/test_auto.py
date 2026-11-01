@@ -131,14 +131,46 @@ class AutoTests(unittest.TestCase):
             with self.assertRaises(vg.GuardError):
                 va.public_listeners(text)
 
-    def test_fresh_server_opens_only_actual_ssh(self):
+    def test_fresh_server_always_opens_443_tcp_and_udp(self):
         self.collect()
-        self.assertEqual(self.w.firewall_ports(), [])
+        self.assertEqual(self.w.firewall_ports(), [
+            {'port':443,'protocol':'tcp','source':'any'},
+            {'port':443,'protocol':'udp','source':'any'}])
 
-    def test_existing_web_listener_is_retained_without_opening_unused_ports(self):
+    def test_existing_443_listener_keeps_fixed_tcp_and_udp_policy(self):
         self.collect()
         self.g.runner.answers[('ss','-H','-lntu')] = (0,'tcp LISTEN 0 128 *:443 *:*','')
-        self.assertEqual(self.w.firewall_ports(), [{'port':443,'protocol':'tcp','source':'any'}])
+        self.assertEqual(self.w.firewall_ports(), [
+            {'port':443,'protocol':'tcp','source':'any'},
+            {'port':443,'protocol':'udp','source':'any'}])
+
+    def test_old_business_ports_are_not_inherited_by_the_default_preset(self):
+        c=copy.deepcopy(vg.DEFAULTS)
+        c.update(business_ports_confirmed=True,business_ports=[{'port':8443,'protocol':'tcp','source':'any'}])
+        self.g.atomic(vg.CONFIG,json.dumps(c))
+        self.collect()
+        self.assertEqual({(x['port'],x['protocol']) for x in self.g.config()['business_ports']}, {(443,'tcp'),(443,'udp')})
+
+    def test_port_80_is_not_automatically_allowed(self):
+        state=self.collect()
+        self.g.runner.answers[('ss','-H','-lntu')]=(0,'tcp LISTEN 0 128 *:80 *:*','')
+        with patch.object(self.w,'network_ready'):
+            self.assertNotIn('firewall',self.w.critical_stages(state))
+        self.assertTrue(any('80/tcp' in x['reason'] for x in state['skipped']))
+
+    def test_firewall_applies_only_443_business_rules_and_preserves_ssh(self):
+        self.collect(); self.g.start('firewall')
+        self.g.stage_firewall()
+        allowed={(int(x[x.index('port')+1]),x[x.index('proto')+1])
+                 for x in self.g.runner.calls if x[:2]==('ufw','allow')}
+        self.assertEqual(allowed,{(2222,'tcp'),(443,'tcp'),(443,'udp')})
+
+    def test_upgrade_from_completed_older_preset_applies_new_defaults(self):
+        state=self.collect(); state.update(phase='done',version='0.3.0'); self.w.save(state)
+        with patch.object(self.w,'collect',wraps=self.w.collect) as collect, patch.object(self.w,'drive',return_value=0):
+            self.assertEqual(self.w.run(),0)
+        collect.assert_called_once()
+        self.assertEqual(self.w.state()['version'],vg.VERSION)
 
     def test_unknown_public_database_port_skips_firewall_without_asking(self):
         state = self.collect()

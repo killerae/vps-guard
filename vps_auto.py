@@ -17,13 +17,13 @@ LABELS = {
     "baseline": "系统软件更新、依赖、UTC 时区与时间同步",
     "access": "ops 账号、指定公钥和免密 sudo",
     "network": "当前内核 BBR＋实际出口 fq、保守 TCP 基线",
-    "firewall": "UFW 默认拒绝入站、保留 SSH／认可的业务端口和 Fail2ban",
+    "firewall": "UFW 默认拒绝入站、保留 SSH、放行 443/TCP＋443/UDP 和 Fail2ban",
     "ssh": "保留 SSH 端口，关闭 root／密码 SSH，新连接验证",
     "maintenance": "每日安全更新、不自动重启、日志限额与每小时健康检查",
     "backup": "沿用已配置的异地备份调度",
     "swap": "新建 Swap", "tailscale": "安装 Tailscale",
 }
-WEB_PORTS = {(80, "tcp"), (443, "tcp"), (443, "udp")}
+BUSINESS_PORTS = ((443, "tcp"), (443, "udp"))
 
 
 def public_listeners(text):
@@ -72,7 +72,9 @@ class AutoWizard(Wizard):
         c = self.g.config() if previous else copy.deepcopy(vg.DEFAULTS)
         c.update(admin_user="ops", admin_public_keys=[PUBLIC_KEY], sudo_mode="key",
                  swap_mib=None, rollback_minutes=10, timezone="UTC", upgrade_packages=True,
-                 ssh_port=None)
+                 ssh_port=None, business_ports_confirmed=True,
+                 business_ports=[{"port": port, "protocol": protocol, "source": "any"}
+                                 for port, protocol in BUSINESS_PORTS])
         devices = c["network"]["devices"]
         c["network"] = copy.deepcopy(vg.DEFAULTS["network"])
         c["network"]["devices"] = devices
@@ -151,16 +153,11 @@ class AutoWizard(Wizard):
             raise vg.GuardError("无法确认当前监听端口")
         ssh = {(p, "tcp") for p in self.g.ssh_ports()}
         actual = public_listeners(listeners) - ssh
-        approved = c["business_ports"] if c["business_ports_confirmed"] else []
-        allowed = WEB_PORTS | {(x["port"], x["protocol"]) for x in approved}
-        unknown = actual - allowed
+        unknown = actual - set(BUSINESS_PORTS)
         if unknown:
             raise vg.GuardError("存在未确认业务端口 " + ", ".join(str(p)+"/"+proto for p, proto in sorted(unknown)) + "；保留当前防火墙以免中断业务")
-        ports = list(approved)
-        for port, protocol in sorted(actual & WEB_PORTS):
-            if not any(x["port"] == port and x["protocol"] == protocol for x in ports):
-                ports.append({"port": port, "protocol": protocol, "source": "any"})
-        return ports
+        return [{"port": port, "protocol": protocol, "source": "any"}
+                for port, protocol in BUSINESS_PORTS]
 
     def network_ready(self):
         self.g.qdisc_plan(self.g.network_devices())
@@ -252,6 +249,8 @@ class AutoWizard(Wizard):
         if pending:
             lines += ["", "待检查："] + ["  " + x["status"] + " " + x["name"] + "：" + x["detail"] for x in pending]
         lines += ["", "默认目标：ops＋指定公钥；免密 sudo 具有完整管理员权限。",
+                  "默认业务规则：仅 443/TCP＋443/UDP；SSH 管理端口另行保留。",
+                  "既有 UFW 额外放行规则不会自动删除；防火墙冲突／未知端口会保留现状并在上方说明。",
                   "新建 Swap：关闭；Tailscale：不安装；系统重启：不自动执行。",
                   "若阶段失败，软件升级、账号与组成员变更可能已经发生；详细命令与恢复结果见 JSON。",
                   "报告：/var/lib/vps-guard/last-report.txt 与 last-report.json",
@@ -266,7 +265,7 @@ class AutoWizard(Wizard):
         self.g.preflight()
         with self.g.lock("wizard.lock"):
             state = self.state()
-            if state and (restart or state.get("profile") != "personal-auto"):
+            if state and (restart or state.get("profile") != "personal-auto" or state.get("version") != vg.VERSION):
                 if self.g.pending():
                     raise vg.GuardError("先确认或恢复旧变更，再开始默认方案")
                 self.g.atomic(vg.STATE + "/wizard-history/" + str(time.time_ns()) + ".json", json.dumps(state))
