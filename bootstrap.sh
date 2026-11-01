@@ -2,8 +2,8 @@
 # Public entry point. Download the complete file before executing it.
 set -euo pipefail
 umask 077
-readonly VPS_GUARD_COMMIT="dcc29272075d931b1df794530fac22efffb7a00c"
-readonly VPS_GUARD_MANIFEST_SHA256="98cb870ec386120d2e216749c616f60fc6d9bacec58f8150a54907d3f3d1ba5d"
+readonly VPS_GUARD_COMMIT="b6e3f8b5f2bd39707e0067c7fc8a853d7f21a6c7"
+readonly VPS_GUARD_MANIFEST_SHA256="17d10da06165e04776aee3b515b95f8aa5311f006337d016d3064e50a20c5fc6"
 task_mode=install
 task_destination=
 case "$#" in
