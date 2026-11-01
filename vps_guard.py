@@ -24,7 +24,7 @@ import time
 import urllib.request
 import uuid
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 CONFIG = "/etc/vps-guard/config.json"
 STATE = "/var/lib/vps-guard"
 NETWORK_FILE = "/etc/sysctl.d/99-vps-guard-network.conf"
@@ -273,12 +273,14 @@ class Guard:
         return c
 
     @contextlib.contextmanager
-    def lock(self):
+    def lock(self, name="lock"):
         import fcntl
         p = self.fs(STATE)
         p.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(p, 0o700)
-        with (p / "lock").open("a") as f:
+        if name not in ("lock", "wizard.lock"):
+            raise GuardError("锁名称错误")
+        with (p / name).open("a") as f:
             try:
                 fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
@@ -440,6 +442,10 @@ class Guard:
         return True
 
     def arm(self):
+        if self.tx.get("guard_unit") and self.tx["status"] == "awaiting_confirmation":
+            if time.time() >= self.tx["deadline"]:
+                raise GuardError("验证窗口已经过期，停止后续变更")
+            return
         if not self.tx["origin_session"]:
             raise GuardError("SSH／防火墙／队列变更需从可识别的 SSH 会话运行")
         minutes = self.config()["rollback_minutes"]
@@ -457,7 +463,10 @@ class Guard:
     def finish(self):
         if self.tx["status"] == "awaiting_confirmation":
             print(f"变更 {self.tx['id']} 等待新 SSH 连接确认，超时将自动恢复。")
-            print(f"在新 Netcatty 连接中执行：sudo vps-guard confirm {self.tx['id']}")
+            if self.tx["stage"] == "critical":
+                print("请再新建一条 SSH 连接，执行：sudo vps-guard continue")
+            else:
+                print(f"在新 Netcatty 连接中执行：sudo vps-guard confirm {self.tx['id']}")
         else:
             self.tx["status"] = "committed"
             self.save_tx()
@@ -506,6 +515,39 @@ class Guard:
                 print(f"自动恢复未完整成功，请通过保留会话／控制台检查记录 {ident}", file=sys.stderr)
             raise
 
+    def apply_critical(self, stages, on_started=None):
+        if not stages or any(x not in ("ssh", "firewall", "network") for x in stages):
+            raise GuardError("关键阶段选择错误")
+        self.preflight(rescue=True)
+        if self.pending():
+            raise GuardError("先确认或恢复上一次变更")
+        self.start("critical")
+        proof = json.loads(self.read(STATE + "/access-verified.json", "{}"))
+        self.tx["components"] = list(stages)
+        self.tx["blocked_sessions"] = [x for x in (self.session(), proof.get("session")) if x]
+        self.save_tx()
+        try:
+            if on_started:
+                on_started(self.tx["id"])
+            # One rollback window covers the selected modules, deployed in order.
+            for stage in ("network", "firewall", "ssh"):
+                if stage in stages:
+                    self.tx["active_component"] = stage
+                    self.save_tx()
+                    print("正在部署：" + stage)
+                    getattr(self, "stage_" + stage)()
+            self.tx["ready_at"] = time.time()
+            self.save_tx()
+            self.finish()
+            return self.tx["id"]
+        except Exception:
+            ident = self.tx["id"]
+            try:
+                self.rollback(ident, automatic=True)
+            except Exception:
+                print("自动恢复未完整成功，请使用保留会话／控制台检查：" + ident, file=sys.stderr)
+            raise
+
     def record_stage(self):
         files = {}
         for path in self.tx["files"]:
@@ -513,9 +555,12 @@ class Guard:
                 files[path] = sha(self.fs(path).read_bytes())
         marker = {"version": VERSION, "config_digest": sha(json.dumps(self.config(), sort_keys=True).encode()),
                   "files": files, "time": utc()}
-        if self.tx["stage"] == "firewall":
-            marker["ufw_status"] = self.out("ufw", "status", "verbose")
-        self.atomic(STATE + "/stages/" + self.tx["stage"] + ".json", json.dumps(marker))
+        stages = self.tx.get("components", [self.tx["stage"]])
+        for stage in stages:
+            item = dict(marker)
+            if stage == "firewall":
+                item["ufw_status"] = self.out("ufw", "status", "verbose")
+            self.atomic(STATE + "/stages/" + stage + ".json", json.dumps(item))
 
     def stage_current(self, stage):
         if stage not in ("ssh", "firewall", "network"):
@@ -604,10 +649,49 @@ class Guard:
         proof = {"origin": self.session(), "digest": self.key_digest(), "time": utc(),
                  "boot_id": self.read("/proc/sys/kernel/random/boot_id").strip()}
         self.atomic(STATE + "/access-pending.json", json.dumps(proof))
-        print(f"在 Netcatty 新建 {user} 的密钥连接，再运行：sudo vps-guard confirm-login")
+        print(f"在 Netcatty 新建 {user} 的密钥连接；向导使用 sudo vps-guard continue，高级分步使用 confirm-login。")
         self.note("账号、组成员及密码变更不会自动删除或逆转；尚未关闭 root／密码 SSH。")
 
-    def confirm_login(self):
+    def connection_auth(self, session):
+        if not session:
+            return None
+        client, client_port, _, _ = session.split()
+        rc, text, _ = self.run("journalctl", "-b", "--no-pager", "-o", "json", "-n", "300",
+                               "-t", "sshd", "-t", "sshd-session", check=False)
+        if rc:
+            return None
+        expected_user = self.config()["admin_user"]
+        for line in reversed(text.splitlines()):
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if str(entry.get("_UID", "")) != "0":
+                continue
+            executable = str(entry.get("_EXE", ""))
+            if executable and not Path(executable).name.startswith("sshd"):
+                continue
+            message = entry.get("MESSAGE")
+            if not isinstance(message, str):
+                continue
+            m = re.match(r"^Accepted (\S+) for (\S+) from (\S+) port (\d+) ssh2(?:[: ].*)?$", message)
+            if not m or m.group(2) != expected_user or m.group(4) != client_port:
+                continue
+            try:
+                if ipaddress.ip_address(m.group(3)) != ipaddress.ip_address(client):
+                    continue
+                stamp = int(entry["__REALTIME_TIMESTAMP"]) / 1e6
+            except (ValueError, KeyError):
+                continue
+            fp = re.search(r"SHA256:[A-Za-z0-9+/]+", message)
+            return {"method": m.group(1), "time": stamp, "fingerprint": fp.group(0) if fp else None}
+        return None
+
+    def configured_fingerprints(self):
+        return {"SHA256:" + base64.b64encode(hashlib.sha256(base64.b64decode(k.split()[1])).digest()).decode().rstrip("=")
+                for k in self.config()["admin_public_keys"]}
+
+    def confirm_login(self, automatic=False):
         c = self.config()
         if os.environ.get("SUDO_USER") != c["admin_user"]:
             raise GuardError("请从新运维账号登录，并通过 sudo 执行本命令")
@@ -617,13 +701,23 @@ class Guard:
             raise GuardError("需要独立的新 SSH 连接，且配置公钥须与 access 阶段一致")
         if pending.get("boot_id") != self.read("/proc/sys/kernel/random/boot_id").strip():
             raise GuardError("系统已重启，请重新执行 access 检查")
-        answer = input("确认本次在 Netcatty 选择了密钥认证且 sudo 已成功，输入 KEY：").strip()
-        if answer != "KEY":
-            raise GuardError("未记录密钥登录确认")
+        auth = self.connection_auth(session) if automatic else None
+        if auth:
+            if auth["method"] != "publickey":
+                raise GuardError("当前连接使用了其他认证方式，请在 Netcatty 选择密钥后重新连接")
+            if auth["fingerprint"] not in self.configured_fingerprints():
+                raise GuardError("本次登录的密钥与向导配置不一致，请核对")
+            if auth["time"] < dt.datetime.fromisoformat(pending["time"]).timestamp():
+                raise GuardError("请在账号准备完成后重新建立密钥连接")
+        else:
+            print("未读取到足够的 SSH 认证日志，需要你确认本次实际使用了密钥。")
+            answer = input("确认在 Netcatty 选择了密钥认证且 sudo 成功，输入 KEY：").strip()
+            if answer != "KEY":
+                raise GuardError("未记录密钥登录确认")
         proof = {"digest": self.key_digest(), "session": session, "time": utc(),
                  "boot_id": pending["boot_id"]}
         self.atomic(STATE + "/access-verified.json", json.dumps(proof))
-        print("已记录独立运维账号登录和 sudo 确认；可返回原会话执行 SSH 加固。")
+        print("已记录独立运维账号登录和 sudo 确认。")
 
     def stage_ssh(self):
         c = self.config()
@@ -1036,15 +1130,25 @@ class Guard:
         if self.tx["status"] != "awaiting_confirmation" or time.time() >= self.tx["deadline"]:
             raise GuardError("该变更已确认、已恢复或已过期，请检查状态")
         session = self.session()
-        if not session or session == self.tx["origin_session"]:
+        if not session or session == self.tx["origin_session"] or session in self.tx.get("blocked_sessions", []):
             raise GuardError("必须从独立的新 SSH 连接确认，不能在原会话直接确认")
-        if self.tx["stage"] == "ssh":
+        stages = set(self.tx.get("components", [self.tx["stage"]]))
+        if "ssh" in stages:
             if os.environ.get("SUDO_USER") != self.config()["admin_user"]:
                 raise GuardError("SSH 加固必须从运维账号的新密钥连接通过 sudo 确认")
             self.assert_ssh()
-        if self.tx["stage"] == "firewall" and "Status: active" not in self.out("ufw", "status"):
+        if self.tx["stage"] == "critical":
+            auth = self.connection_auth(session)
+            if auth:
+                if auth["time"] < self.tx.get("ready_at", self.tx["deadline"]):
+                    raise GuardError("本连接早于本次变更，请在提示出现后重新建立连接")
+                if "ssh" in stages and (auth["method"] != "publickey" or auth["fingerprint"] not in self.configured_fingerprints()):
+                    raise GuardError("新连接尚未证明使用了预期密钥")
+            elif input("请确认这是部署完成后新建的连接，输入 NEW：").strip() != "NEW":
+                raise GuardError("未确认新的管理连接")
+        if "firewall" in stages and "Status: active" not in self.out("ufw", "status"):
             raise GuardError("UFW 未生效")
-        if self.tx["stage"] == "network":
+        if "network" in stages:
             self.network_ensure(check_only=True)
             if self.out("sysctl", "-n", "net.ipv4.tcp_congestion_control") != "bbr":
                 raise GuardError("BBR 未生效")
@@ -1110,19 +1214,20 @@ class Guard:
                                              q["old_kind"], *q["old_options"], check=False)[0]:
                 errors.append("恢复队列 " + q["dev"])
         stage = self.tx["stage"]
-        if stage == "ssh":
+        stages = set(self.tx.get("components", [stage]))
+        if "ssh" in stages:
             if self.run("/usr/sbin/sshd", "-t", check=False)[0] == 0:
                 if self.run("systemctl", "reload", "ssh.service", check=False)[0]:
                     errors.append("重载 SSH")
             else:
                 errors.append("恢复后 SSH 语法检查")
-        if stage == "firewall" and runtime.get("ufw_modified"):
+        if "firewall" in stages and runtime.get("ufw_modified"):
             if runtime["ufw_active"] and self.run("ufw", "--force", "enable", check=False)[0]:
                 errors.append("恢复 UFW 状态")
             if runtime.get("units", {}).get("fail2ban.service", {}).get("active"):
                 self.run("systemctl", "restart", "fail2ban", check=False)
         self.run("systemctl", "daemon-reload", check=False)
-        if stage == "network" and "network_unit_enabled" in runtime and not runtime["network_unit_enabled"]:
+        if "network" in stages and "network_unit_enabled" in runtime and not runtime["network_unit_enabled"]:
             self.run("systemctl", "disable", "vps-guard-network.service", check=False)
         for unit, before in runtime.get("units", {}).items():
             enable = "enable" if before["enabled"] else "disable"
@@ -1153,7 +1258,7 @@ class Guard:
         self.atomic(STATE + "/attestations/" + check + ".json", json.dumps(record, ensure_ascii=False))
         print("已保存人工验收记录；它是操作人提供的证据，不是程序自动探测结果。")
 
-    def verify(self):
+    def verify(self, scope=None):
         checks = []
         def add(name, status, detail):
             checks.append({"name": name, "status": status, "detail": detail})
@@ -1210,6 +1315,19 @@ class Guard:
         add("post_reboot", "passed" if rebooted else "pending_manual", "最近应用变更后已重启" if rebooted else "维护窗口重启后再次验收；待确认变更期间不要重启")
         for pending in self.pending():
             add("unconfirmed_change", "pending_manual", pending["id"])
+        if scope is not None:
+            groups = {
+                "ssh_policy": "ssh", "auth_rejection": "ssh", "firewall": "firewall",
+                "fail2ban": "firewall", "ban_test": "firewall", "egress_fq": "network",
+                "performance": "network", "time_sync": "baseline", "backup": "backup",
+                "file_restore": "backup", "service_restore": "backup",
+                "apt-daily-upgrade.timer": "maintenance", "vps-guard-health.timer": "maintenance",
+                "notifications": "maintenance",
+            }
+            for item in checks:
+                group = "network" if item["name"].startswith("net.") else groups.get(item["name"])
+                if group and group not in scope:
+                    item.update(status="skipped", detail="本轮由操作人选择跳过：" + group)
         print(json.dumps({"time": utc(), "checks": checks}, ensure_ascii=False, indent=2))
         return 2 if any(x["status"] == "failed" for x in checks) else (3 if any(x["status"] == "pending_manual" for x in checks) else 0)
 
@@ -1256,7 +1374,7 @@ def root_required():
         raise GuardError("此操作需要 Linux root 权限，请通过 sudo 执行")
 
 
-def menu(g):
+def advanced_menu(g):
     choices = [("只读安全检查", "audit"), ("初次填写配置", "setup"), ("查看执行计划", "plan")]
     choices += [("执行阶段：" + s, "apply " + s) for s in STAGES]
     choices += [("验收报告", "verify"), ("查看待确认变更", "pending")]
@@ -1270,13 +1388,29 @@ def menu(g):
     return main(shlex.split(choices[int(value)-1][1]))
 
 
+def menu(g):
+    choices = [("开始／继续加固向导", "wizard"), ("只读安全检查", "audit"),
+               ("加固验收", "verify"), ("查看待确认变更", "pending"),
+               ("高级分步操作", "advanced"), ("查看执行计划", "plan")]
+    print("VPS Guard " + VERSION)
+    for i, (label, _) in enumerate(choices, 1):
+        print(f"{i}. {label}")
+    value = input("选择编号，回车退出：").strip()
+    if not value:
+        return 0
+    if not value.isdigit() or not 1 <= int(value) <= len(choices):
+        raise GuardError("编号错误")
+    return main([choices[int(value)-1][1]])
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description="VPS Guard：分阶段加固与网络调优")
     p.add_argument("--version", action="version", version=VERSION)
     sub = p.add_subparsers(dest="command")
-    for name in ("audit", "setup", "plan", "verify", "menu", "pending", "confirm-login",
+    for name in ("audit", "setup", "plan", "verify", "menu", "advanced", "continue", "pending", "confirm-login",
                  "network-ensure", "healthcheck", "backup-init", "backup-run", "backup-restore-test"):
         sub.add_parser(name)
+    a = sub.add_parser("wizard"); a.add_argument("--restart", action="store_true")
     a = sub.add_parser("apply"); a.add_argument("stage", choices=STAGES)
     a = sub.add_parser("attest"); a.add_argument("check", choices=tuple(ATTESTATIONS))
     a = sub.add_parser("confirm"); a.add_argument("run_id")
@@ -1289,7 +1423,13 @@ def main(argv=None):
             print(json.dumps(g.audit(), ensure_ascii=False, indent=2)); return 0
         if cmd == "menu":
             return menu(g)
+        if cmd == "advanced":
+            return advanced_menu(g)
         root_required()
+        if cmd in ("wizard", "continue"):
+            from vps_wizard import Wizard
+            wizard = Wizard(g)
+            return wizard.run(restart=args.restart) if cmd == "wizard" else wizard.continue_from_login()
         if cmd in ("backup-run", "backup-restore-test", "backup-init", "healthcheck", "network-ensure"):
             g.preflight()
         with g.lock():
