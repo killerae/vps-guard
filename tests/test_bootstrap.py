@@ -107,5 +107,20 @@ class BootstrapTests(unittest.TestCase):
         self.assertIn('exec </dev/tty', SCRIPT)
 
 
+class UpgradeSafetyTests(unittest.TestCase):
+    def test_installer_accepts_only_finished_transactions(self):
+        script = (ROOT/'install.sh').read_text(encoding='utf-8')
+        guard = script.split("<<'PY'\n",1)[1].split('\nPY\n',1)[0]
+        for status in ('committed','rolled_back','running','awaiting_confirmation','rollback_failed'):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                run = Path(directory)/'runs/example'
+                run.mkdir(parents=True)
+                (run/'manifest.json').write_text('{"id":"example","status":"'+status+'"}',encoding='utf-8')
+                # Execute the actual installer guard against a temporary fixture.
+                code = guard.replace("Path('/var/lib/vps-guard/runs')", 'Path('+repr(str(Path(directory)/'runs'))+')')
+                result = subprocess.run([sys.executable,'-X','utf8','-I','-c',code],capture_output=True,timeout=15)
+                self.assertEqual(result.returncode==0, status in ('committed','rolled_back'))
+
+
 if __name__ == '__main__':
     unittest.main()

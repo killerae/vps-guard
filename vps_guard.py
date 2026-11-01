@@ -24,7 +24,7 @@ import time
 import urllib.request
 import uuid
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 CONFIG = "/etc/vps-guard/config.json"
 STATE = "/var/lib/vps-guard"
 NETWORK_FILE = "/etc/sysctl.d/99-vps-guard-network.conf"
@@ -54,6 +54,7 @@ ATTESTATIONS = {
 }
 DEFAULTS = {
     "admin_user": "ops", "admin_public_keys": [], "provider_console_verified": False,
+    "sudo_mode": "password",
     "business_ports_confirmed": False, "ssh_port": None, "ssh_sources": [],
     "business_ports": [], "timezone": "UTC", "upgrade_packages": True,
     "swap_mib": None, "rollback_minutes": 5,
@@ -113,6 +114,8 @@ def validate_config(c: dict) -> None:
         raise GuardError("admin_user 仅支持普通 Linux 用户名")
     if c["admin_user"] == "root":
         raise GuardError("admin_user 不能是 root")
+    if c["sudo_mode"] not in ("password", "key"):
+        raise GuardError("sudo_mode 必须为 password 或 key")
     for k in ("provider_console_verified", "business_ports_confirmed", "upgrade_packages"):
         if type(c[k]) is not bool:
             raise GuardError(f"{k} 必须是布尔值")
@@ -201,6 +204,7 @@ class Guard:
             raise GuardError("测试根目录必须配合模拟命令执行器")
         self.runner = runner or Runner()
         self.tx = None
+        self.automatic = False
 
     def fs(self, path):
         if not str(path).startswith("/") or ".." in Path(path).parts:
@@ -214,7 +218,23 @@ class Guard:
             return default
 
     def run(self, *args, **kw):
-        return self.runner.run(args, **kw)
+        if self.automatic and args and args[0] == "apt-get":
+            args = (args[0], "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold",
+                    "-o", "Acquire::Retries=3", "-o", "DPkg::Lock::Timeout=120", *args[1:])
+            env = dict(os.environ if kw.get("env") is None else kw["env"])
+            env.update(DEBIAN_FRONTEND="noninteractive", NEEDRESTART_MODE="l", APT_LISTCHANGES_FRONTEND="none")
+            kw["env"] = env
+        try:
+            result = self.runner.run(args, **kw)
+        except GuardError:
+            if self.automatic and self.tx and self.tx["status"] in ("running", "awaiting_confirmation"):
+                self.tx.setdefault("commands", []).append({"argv": list(args), "result": "failed"})
+                self.save_tx()
+            raise
+        if self.automatic and self.tx and self.tx["status"] in ("running", "awaiting_confirmation"):
+            self.tx.setdefault("commands", []).append({"argv": list(args), "returncode": result[0]})
+            self.save_tx()
+        return result
 
     def out(self, *args):
         return self.run(*args, check=False)[1]
@@ -495,8 +515,8 @@ class Guard:
                 raise GuardError(f"服务尚未就绪：{args[0]}")
             time.sleep(0.25)
 
-    def apply(self, stage):
-        self.preflight(rescue=True)
+    def apply(self, stage, *, require_console=True):
+        self.preflight(rescue=require_console)
         self.config()
         if self.pending():
             raise GuardError("尚有等待确认的变更，先确认或恢复")
@@ -515,10 +535,10 @@ class Guard:
                 print(f"自动恢复未完整成功，请通过保留会话／控制台检查记录 {ident}", file=sys.stderr)
             raise
 
-    def apply_critical(self, stages, on_started=None):
+    def apply_critical(self, stages, on_started=None, *, require_console=True):
         if not stages or any(x not in ("ssh", "firewall", "network") for x in stages):
             raise GuardError("关键阶段选择错误")
-        self.preflight(rescue=True)
+        self.preflight(rescue=require_console)
         if self.pending():
             raise GuardError("先确认或恢复上一次变更")
         self.start("critical")
@@ -609,7 +629,18 @@ class Guard:
 
     def key_digest(self):
         c = self.config()
-        return sha(json.dumps([c["admin_user"], c["admin_public_keys"]], sort_keys=True).encode())
+        return sha(json.dumps([c["admin_user"], c["admin_public_keys"], c["sudo_mode"]], sort_keys=True).encode())
+
+    def install_key_sudo(self, user):
+        if user != self.config()["admin_user"] or not re.fullmatch(r"[a-z_][a-z0-9_-]{0,30}", user) or user == "root":
+            raise GuardError("sudo 账号不符合要求")
+        path = "/etc/sudoers.d/90-vps-guard-" + user
+        self.write(path, "# Managed by VPS Guard: key-only admin with full sudo\n" +
+                   user + " ALL=(ALL:ALL) NOPASSWD: ALL\n", 0o440)
+        self.run("visudo", "-cf", path)
+        self.run("visudo", "-c")
+        self.run("sudo", "-n", "-u", user, "--", "sudo", "-n", "--", "/usr/bin/true")
+        self.note("运维账号采用 SSH 密钥和免密 sudo；密钥持有者拥有完整管理员权限。")
 
     def stage_access(self):
         import pwd
@@ -625,15 +656,17 @@ class Guard:
             self.note(f"创建了账号 {user}；回滚保留账号，避免删除其业务数据。")
         if account.pw_uid == 0 or not account.pw_shell.endswith(("/bash", "/sh", "/zsh")):
             raise GuardError("运维账号 UID／登录 shell 不符合要求")
-        home = Path(account.pw_dir)
-        if not str(home).startswith("/home/") or home.is_symlink():
+        home = self.fs(account.pw_dir)
+        if not account.pw_dir.startswith("/home/") or home.is_symlink():
             raise GuardError("首版要求运维账号使用 /home 下的普通主目录")
         sshdir = home / ".ssh"
         if sshdir.is_symlink():
             raise GuardError(".ssh 目录不能是符号链接")
         sshdir.mkdir(exist_ok=True, mode=0o700)
-        os.chmod(sshdir, 0o700); os.chown(sshdir, account.pw_uid, account.pw_gid)
-        path = str(sshdir / "authorized_keys")
+        os.chmod(sshdir, 0o700)
+        if hasattr(os, "chown"):
+            os.chown(sshdir, account.pw_uid, account.pw_gid)
+        path = (Path(account.pw_dir) / ".ssh" / "authorized_keys").as_posix()
         old = self.read(path)
         lines = old.splitlines()
         existing = {" ".join(x.split()[:2]) for x in lines if x.strip()}
@@ -642,10 +675,13 @@ class Guard:
                 lines.append(key.strip())
         self.write(path, "\n".join(lines) + "\n", 0o600, (account.pw_uid, account.pw_gid))
         self.run("usermod", "-aG", "sudo", user)
-        status = self.out("passwd", "-S", user).split()
-        if len(status) < 2 or status[1] != "P":
-            print(f"请为 {user} 设置本地 sudo 密码；输入不会回显。")
-            self.run("passwd", user, interactive=True, timeout=300)
+        if c["sudo_mode"] == "key":
+            self.install_key_sudo(user)
+        else:
+            status = self.out("passwd", "-S", user).split()
+            if len(status) < 2 or status[1] != "P":
+                print(f"请为 {user} 设置本地 sudo 密码；输入不会回显。")
+                self.run("passwd", user, interactive=True, timeout=300)
         proof = {"origin": self.session(), "digest": self.key_digest(), "time": utc(),
                  "boot_id": self.read("/proc/sys/kernel/random/boot_id").strip()}
         self.atomic(STATE + "/access-pending.json", json.dumps(proof))
@@ -978,7 +1014,15 @@ class Guard:
     def stage_maintenance(self):
         for unit in ("apt-daily.timer", "apt-daily-upgrade.timer", "vps-guard-health.timer"):
             self.remember_unit(unit)
-        settings = ('APT::Periodic::Update-Package-Lists "1";\n'
+        origins = ('"origin=Debian,label=Debian-Security,codename=${distro_codename}-security";\n'
+                   if self.os_release()["ID"] == "debian" else
+                   '"origin=Ubuntu,archive=${distro_codename}-security";\n'
+                   '"origin=UbuntuESMApps,archive=${distro_codename}-apps-security";\n'
+                   '"origin=UbuntuESM,archive=${distro_codename}-infra-security";\n')
+        settings = ('#clear Unattended-Upgrade::Allowed-Origins;\n'
+                    '#clear Unattended-Upgrade::Origins-Pattern;\n'
+                    'Unattended-Upgrade::Origins-Pattern {\n' + origins + '};\n'
+                    'APT::Periodic::Update-Package-Lists "1";\n'
                     'APT::Periodic::Unattended-Upgrade "1";\n'
                     'Unattended-Upgrade::Automatic-Reboot "false";\n')
         self.write("/etc/apt/apt.conf.d/99-vps-guard", settings, 0o644)
@@ -1389,14 +1433,15 @@ def advanced_menu(g):
 
 
 def menu(g):
-    choices = [("开始／继续加固向导", "wizard"), ("只读安全检查", "audit"),
-               ("加固验收", "verify"), ("查看待确认变更", "pending"),
-               ("高级分步操作", "advanced"), ("查看执行计划", "plan")]
+    choices = [("按个人默认方案一键加固／续跑（ops＋lu-admin 公钥）", "auto"),
+               ("查看上次操作报告", "report"), ("只读安全检查", "audit"),
+               ("查看待确认变更", "pending"), ("高级分步操作", "advanced"),
+               ("自定义交互向导", "wizard")]
     print("VPS Guard " + VERSION)
     for i, (label, _) in enumerate(choices, 1):
         print(f"{i}. {label}")
-    value = input("选择编号，回车退出：").strip()
-    if not value:
+    value = input("回车或输入 1 一键加固；输入 0 退出：").strip() or "1"
+    if value == "0":
         return 0
     if not value.isdigit() or not 1 <= int(value) <= len(choices):
         raise GuardError("编号错误")
@@ -1407,10 +1452,11 @@ def main(argv=None):
     p = argparse.ArgumentParser(description="VPS Guard：分阶段加固与网络调优")
     p.add_argument("--version", action="version", version=VERSION)
     sub = p.add_subparsers(dest="command")
-    for name in ("audit", "setup", "plan", "verify", "menu", "advanced", "continue", "pending", "confirm-login",
+    for name in ("audit", "setup", "plan", "verify", "menu", "advanced", "continue", "pending", "confirm-login", "report",
                  "network-ensure", "healthcheck", "backup-init", "backup-run", "backup-restore-test"):
         sub.add_parser(name)
     a = sub.add_parser("wizard"); a.add_argument("--restart", action="store_true")
+    a = sub.add_parser("auto"); a.add_argument("--restart", action="store_true")
     a = sub.add_parser("apply"); a.add_argument("stage", choices=STAGES)
     a = sub.add_parser("attest"); a.add_argument("check", choices=tuple(ATTESTATIONS))
     a = sub.add_parser("confirm"); a.add_argument("run_id")
@@ -1426,10 +1472,21 @@ def main(argv=None):
         if cmd == "advanced":
             return advanced_menu(g)
         root_required()
-        if cmd in ("wizard", "continue"):
+        if cmd == "report":
+            raw = g.read(STATE + "/last-report.txt")
+            if not raw:
+                raise GuardError("尚无一键加固报告，请先运行 sudo vps-guard auto")
+            print(raw)
+            return 0
+        if cmd in ("auto", "wizard", "continue"):
             from vps_wizard import Wizard
-            wizard = Wizard(g)
-            return wizard.run(restart=args.restart) if cmd == "wizard" else wizard.continue_from_login()
+            state = json.loads(g.read(STATE + "/wizard.json", "{}"))
+            if cmd == "auto" or (cmd == "continue" and state.get("profile") == "personal-auto"):
+                from vps_auto import AutoWizard
+                wizard = AutoWizard(g)
+            else:
+                wizard = Wizard(g)
+            return wizard.continue_from_login() if cmd == "continue" else wizard.run(restart=args.restart)
         if cmd in ("backup-run", "backup-restore-test", "backup-init", "healthcheck", "network-ensure"):
             g.preflight()
         with g.lock():

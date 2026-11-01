@@ -11,10 +11,10 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 FILES = (
     '.gitignore', '.github/workflows/checks.yml', 'LICENSE', 'README.md',
-    'vps_guard.py', 'vps_wizard.py', 'install.sh', 'bin/vps-guard', 'config.example.json',
+    'vps_guard.py', 'vps_wizard.py', 'vps_auto.py', 'install.sh', 'bin/vps-guard', 'config.example.json',
     'backup.env.example', 'notify.env.example', 'netcatty/snippets.json',
     'netcatty/README.md', 'docs/OPERATIONS.md', 'docs/TESTING.md',
-    'tests/test_vps_guard.py', 'tests/test_wizard.py', 'tests/test_bootstrap.py',
+    'tests/test_vps_guard.py', 'tests/test_wizard.py', 'tests/test_auto.py', 'tests/test_bootstrap.py',
     'bootstrap.sh', 'tools/build_release.py',
 )
 

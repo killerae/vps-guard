@@ -81,10 +81,17 @@ class Wizard:
             return
         state["active_stage"] = stage
         self.save(state)
+
         with self.g.lock():
             self.g.apply(stage)
         state["completed"].append(stage)
         self.save(state)
+
+    def apply_critical(self, stages, on_started):
+        return self.g.apply_critical(stages, on_started=on_started)
+
+    def critical_stages(self, state):
+        return [x for x in ("network", "firewall", "ssh") if x in state["selected"]]
 
     def collect(self):
         self.g.preflight()
@@ -286,16 +293,17 @@ class Wizard:
             print("验证成功后，本窗口会自动接着部署。Ctrl+C 可暂停，进度已保存。")
             state = self.wait_for("await_login")
         if state["phase"] in ("prepare", "critical"):
-            critical = [x for x in ("network", "firewall", "ssh") if x in selected]
+            critical = self.critical_stages(state)
             if critical:
                 state["phase"] = "critical"
+                state["active_stage"] = "critical"
                 self.save(state)
                 def on_started(ident):
                     state["transaction"] = ident
                     state["phase"] = "critical_running"
                     self.save(state)
                 with self.g.lock():
-                    ident = self.g.apply_critical(critical, on_started=on_started)
+                    ident = self.apply_critical(critical, on_started)
                 state["phase"] = "await_confirmation"
                 state["transaction"] = ident
                 self.save(state)
@@ -314,20 +322,23 @@ class Wizard:
             state["finished_at"] = vg.utc()
             self.save(state)
         if state["phase"] == "done":
-            print("\n选定项目已部署。正在生成验收报告；未选项目会明确列为跳过。")
-            buffer = io.StringIO()
-            with contextlib.redirect_stdout(buffer):
-                code = self.g.verify(scope=state["selected"])
-            report = buffer.getvalue()
-            self.g.atomic(vg.STATE + "/wizard-report.json", report)
-            data = json.loads(report)
-            for item in data["checks"]:
-                print(f"{item['status']:14} {item['name']}：{item['detail']}")
-            print("报告：/var/lib/vps-guard/wizard-report.json")
-            print("重启持久化、外部端口、业务认证及性能改善需按报告完成验证。")
-            print("以后输入 sudo vps-guard 即可进入工具菜单。")
-            return 2 if code == 2 else 0
+            return self.report(state)
         return 0
+
+    def report(self, state):
+        print("\n选定项目已部署。正在生成验收报告；未选项目会明确列为跳过。")
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            code = self.g.verify(scope=state["selected"])
+        report = buffer.getvalue()
+        self.g.atomic(vg.STATE + "/wizard-report.json", report)
+        data = json.loads(report)
+        for item in data["checks"]:
+            print(f"{item['status']:14} {item['name']}：{item['detail']}")
+        print("报告：/var/lib/vps-guard/wizard-report.json")
+        print("重启持久化、外部端口、业务认证及性能改善需按报告完成验证。")
+        print("以后输入 sudo vps-guard 即可进入工具菜单。")
+        return 2 if code == 2 else 0
 
     def refresh_transaction(self, state):
         phase = state.get("resume_phase") if state["phase"] == "paused" else state["phase"]
@@ -397,7 +408,7 @@ class Wizard:
         with self.g.lock():
             state = self.state()
             if state is None:
-                raise vg.GuardError("没有待继续的向导，请先运行 sudo vps-guard wizard")
+                raise vg.GuardError("没有待继续的向导，请先运行 sudo vps-guard")
             self.check_state(state)
             phase = state["phase"]
             if phase == "paused":
@@ -417,18 +428,17 @@ class Wizard:
                         state["completed"].append(item)
                 state["phase"] = "maintenance"
             elif phase == "done":
-                print("本轮向导已完成；使用 sudo vps-guard 查看菜单。")
+                print("本轮已完成；使用 sudo vps-guard 查看菜单。")
                 return 0
             else:
-                raise vg.GuardError("当前阶段不等待新连接验证；请回到原向导窗口")
+                raise vg.GuardError("当前阶段不等待新连接验证；请回到原窗口")
             state["last_error"] = None
             self.save(state)
-        # A living original wizard will notice the checkpoint and continue itself.
         try:
             with self.g.lock("wizard.lock"):
                 pass
         except vg.GuardError:
-            print("验证完成，原向导窗口将自动继续。")
+            print("验证完成，原窗口将自动继续。")
             return 0
-        print("原向导窗口已退出，将在当前连接继续已保存的流程。")
+        print("原窗口已退出，将在当前连接继续已保存的流程。")
         return self.run()

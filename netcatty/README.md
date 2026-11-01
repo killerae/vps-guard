@@ -1,26 +1,24 @@
 # Netcatty 快捷片段
 
-首次直接使用仓库 README 的一键命令即可，不要求导入片段。安装后也可以输入 `sudo vps-guard` 打开菜单。
+首次执行仓库 README 的一键入口，自动安装并运行个人默认方案。以后输入 `sudo vps-guard` 打开菜单回车，或者运行“一键默认加固／续跑”片段即可；无需导入片段也能使用。
 
-可选导入：打开 Netcatty 的 Snippets／快捷片段管理，导入 snippets.json。包不包含主机、身份或凭据，使用官方 SnippetTransfer 的 kind=netcatty.snippets、version=2 格式。全部片段设置 noAutoRun，手动核对当前机器并回车执行；不绑定全部主机，不广播，不设置连接后自动运行。
+预设为 ops＋lu-admin 公钥＋免密 sudo。主机使用对应的私钥连接；私钥只存于本机。配置和密钥内容不会由本工具上传 GitHub。
 
-## 向导模式
+## SSH 验证
 
-- “开始／继续加固向导”：集中选择项目，按提示部署。
-- “向导继续／新连接确认”：`sudo vps-guard continue`。账号准备后在新运维账号的密钥连接执行；部署完成提示后，再新建独立管理连接执行一次。原向导自动继续，不用变更编号。
+准备账号后，按提示新建 ops 独立密钥连接，执行“继续／新连接确认”：`sudo vps-guard continue`。部署完成提示后，再新建一次独立管理连接执行同一句命令。原窗口自动继续，无需填写变更编号。
 
-sudo 可能不保留 SSH_CONNECTION，工具会尝试从父进程环境读取。无法识别时停止确认。Netcatty 如复用了同一 SSH 传输，需要断开后另建连接；只新开终端标签不足以验证。
+只新开终端标签但复用原 SSH 传输不满足验证条件。保留原窗口，10 分钟内完成部署后的新连接确认；等待期间不要重启。
 
-## 高级分步模式
+## 报告与高级操作
 
-保留 apply access／confirm-login、各模块 apply 及 confirm 编号命令，适合手工控制单个阶段。向导中按 continue 提示操作即可。
+“查看上次操作报告”对应 `sudo vps-guard report`。完整 JSON 在 /var/lib/vps-guard/last-report.json，可交给 AI 后续调整。
 
-“恢复指定变更”要求填写编号，恢复本轮工具管理的文件和运行参数；后续编辑冲突时停止，使用保留连接或服务商控制台检查。
+分步 apply、confirm-login、confirm 编号和 rollback 入口保留给高级操作；默认流程按 continue 提示即可。原有交互问答向导通过 `sudo vps-guard wizard` 进入。
 
-一键入口完整下载后才执行，随后核对固定提交的工具包；手动下载也可进入已验证的包目录运行“安装当前目录工具包”。
+全部片段使用官方 SnippetTransfer 的 kind=netcatty.snippets、version=2 格式，并设置 noAutoRun：手工核对目标机器后执行，不广播，不设置为连接后自动执行。导入包不含主机、身份或私钥。
 
 格式依据：
 
 - https://netcatty.app/en/docs/snippets/
 - https://github.com/binaricat/Netcatty/blob/main/domain/snippetTransfer.ts
-- https://github.com/binaricat/Netcatty/blob/main/domain/snippetTargets.ts

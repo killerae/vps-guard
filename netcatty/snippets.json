@@ -207,9 +207,9 @@
       "noAutoRun": true
     },
     {
-      "label": "00a 开始／继续加固向导",
-      "command": "sudo vps-guard wizard",
-      "description": "集中选择项目，按提示自动部署。",
+      "label": "00a 一键默认加固／续跑",
+      "command": "sudo vps-guard auto",
+      "description": "采用个人默认方案，不再询问各项配置；保留新连接验证。",
       "package": "VPS-Guard",
       "tags": [
         "vps-guard"
@@ -219,7 +219,17 @@
     {
       "label": "00b 向导继续／新连接确认",
       "command": "sudo vps-guard continue",
-      "description": "按提示在独立新 SSH 连接执行，无需变更编号。",
+      "description": "按提示在独立 ops 密钥连接执行；自动识别个人默认方案。",
+      "package": "VPS-Guard",
+      "tags": [
+        "vps-guard"
+      ],
+      "noAutoRun": true
+    },
+    {
+      "label": "00c 查看上次操作报告",
+      "command": "sudo vps-guard report",
+      "description": "查看完成、未执行、失败及待验证项目。",
       "package": "VPS-Guard",
       "tags": [
         "vps-guard"
